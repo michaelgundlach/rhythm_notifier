@@ -1,5 +1,6 @@
 # RhythmNotifier
 
+
 A Godot 4 addon for syncing game events and sound effects with the beat of the music.
 
 ![Hey](/screenshots/example.png)
@@ -55,29 +56,29 @@ The **RhythmNotifier** node will then be available when you Add Node in a scene.
 #   func beats(beat_count: float, repeating := true, start_beat := 0.0) -> Signal
 #
 # We'll use this below to create repeating signals that emit every `beat_count`
-# beats after `start_beat`, and non-repeating signals that emit when we reach
-# `beat_count` beats after `start_beat`.
+# beats, starting on `start_beat`, and non-repeating signals that emit when we reach
+# `start_beat`.
 
 # Play music and emit lots of signals
 func _play_some_music():
-    # Print on beat 4, 8, 12...
+    # Print on beat 0, 4, 8, 12...
     r.beats(4).connect(func(count): print("Hello from beat %d!" % (count * 4)))
 
-    # Print on beat 5, 8, 11...
+    # Print on beat 2, 5, 8, 11...
     r.beats(3, true, 2).connect(func(count): print("Hello from beat %d!" % 2+(count * 3)))
 
-    # Print anytime beat 8.5 is reached
-    r.beats(8.5, false).connect(func(_i): print("Hello from beat eight and a half!"))
+    # Print anytime beat 8.5 is reached.  The first param is ignored when the second is `false`..
+    r.beats(0, false, 8.5).connect(func(_i): print("Hello from beat eight and a half!"))
 
     r.audio_stream_player.play()  # Start signaling
     r.audio_stream_player.seek(1.5)  # pausing/stopping/seeking all supported
 
     # Stop playback on beat 20
-    r.beats(20, false).connect(func(_i): r.audio_stream_player.stop())
+    r.beats(0, false, 20).connect(func(_i): r.audio_stream_player.stop())
 
 # Play the music after 4 pickup beats
 func _play_with_leadin():
-    r.beats(4, false).connect(func(_i):
+    r.beats(0, false, 4).connect(func(_i):
         r.audio_stream_player.play()
     , CONNECT_ONE_SHOT)
 
@@ -111,10 +112,11 @@ var r = RhythmNotifier.new()
 get_tree().current_scene.add_child(r)
 r.running = true
 
-# Say the measure number at the start of each measure
+# Say the measure number at the start of each measure.  We add 1 to the beat count
+# provided, since musicians say "one" on the first measure but we count from 0.
 r.beats(3).connect(func(count):
     print("TIME %.2f, BEAT %2d  :    %d!" %
-        [r.current_position, r.current_beat, count])
+        [r.current_position, r.current_beat, count+1])
 )
 # Say the other downbeats in the measure
 r.beat.connect(func(count):
@@ -130,24 +132,33 @@ r.beats(.5).connect(func(i):
 )
 
 # Output:
+#     TIME 0.00, BEAT  0  :    1!
 #     TIME 0.52, BEAT  0.5:       (and)
 #     TIME 1.00, BEAT  1  :       (2)
 #     TIME 1.52, BEAT  1.5:       (and)
 #     TIME 2.02, BEAT  2  :       (3)
 #     TIME 2.52, BEAT  2.5:       (and)
-#     TIME 3.02, BEAT  3  :    1!
+#     TIME 3.02, BEAT  3  :    2!
 #     TIME 3.52, BEAT  3.5:       (and)
 #     TIME 4.02, BEAT  4  :       (2)
 #     TIME 4.52, BEAT  4.5:       (and)
 #     TIME 5.02, BEAT  5  :       (3)
 #     TIME 5.52, BEAT  5.5:       (and)
-#     TIME 6.02, BEAT  6  :    2!
+#     TIME 6.02, BEAT  6  :    3!
 #     TIME 6.52, BEAT  6.5:       (and)
 #     TIME 7.02, BEAT  7  :       (2)
 #     TIME 7.52, BEAT  7.5:       (and)
 #     TIME 8.02, BEAT  8  :       (3)
 #     TIME 8.50, BEAT  8.5:       (and)
-#     TIME 9.00, BEAT  9  :    3!
+#     TIME 9.00, BEAT  9  :    4!
 #     TIME 9.50, BEAT  9.5:       (and)
 # ...etc
 ```
+
+## CHANGELOG
+
+* Version 1.0:
+  - Initial release
+* Version 1.1:
+  - API change: emit signals on beat zero as well, instead of skipping beat 0.
+  - Bugfix in .beats(_, false, _).

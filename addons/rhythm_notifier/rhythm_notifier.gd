@@ -18,24 +18,24 @@ extends Node
 ##
 ## # Play music and emit lots of signals
 ## func _play_some_music():
-##     # Print on beat 4, 8, 12...
+##     # Print every 4 beats, starting on beat 0.
 ##     r.beats(4).connect(func(count): print("Hello from beat %d!" % (count * 4)))
 ##
-##     # Print on beat 5, 8, 11...
+##     # Print on beat 2, 5, 8, 11...
 ##     r.beats(3, true, 2).connect(func(count): print("Hello from beat %d!" % 2+(count * 3)))
 ##
-##     # Print anytime beat 8.5 is reached
-##     r.beats(8.5, false).connect(func(_i): print("Hello from beat eight and a half!"))
+##     # Print anytime beat 8.5 is reached.  This would happen once per loop in looping audio.
+##     r.beats(0, false, 8.5).connect(func(_i): print("Hello from beat eight and a half!"))
 ##
 ##     r.audio_stream_player.play()  # Start signaling
 ##     r.audio_stream_player.seek(1.5)  # pausing/stopping/seeking all supported
 ##
-##     # Stop playback on beat 20
-##     r.beats(20, false).connect(func(_i): r.audio_stream_player.stop())
+##     # Stop playback on beat 20.
+##     r.beats(0, false, 20).connect(func(_i): r.audio_stream_player.stop())
 ##
 ## # Play the music after 4 pickup beats
 ## func _play_with_leadin():
-##     r.beats(4, false).connect(func(_i):
+##     r.beats(1, false, 4).connect(func(_i):
 ##         r.audio_stream_player.play()
 ##     , CONNECT_ONE_SHOT)
 ##
@@ -68,10 +68,11 @@ extends Node
 ## get_tree().current_scene.add_child(r)
 ## r.running = true
 ## 
-## # Say the measure number at the start of each measure
+## # Say the measure number at the start of each measure.  We add 1 to the beat count
+## # provided, since musicians say "one" on the first measure but we count from 0.
 ## r.beats(3).connect(func(count):
 ##     print("TIME %.2f, BEAT %2d  :    %d!" %
-##         [r.current_position, r.current_beat, count])
+##         [r.current_position, r.current_beat, count+1])
 ## )
 ## # Say the other downbeats in the measure
 ## r.beat.connect(func(count):
@@ -87,24 +88,25 @@ extends Node
 ## )
 ##
 ## # Output:
+## #     TIME 0.00, BEAT  0  :    1!
 ## #     TIME 0.52, BEAT  0.5:       (and)
 ## #     TIME 1.00, BEAT  1  :       (2)
 ## #     TIME 1.52, BEAT  1.5:       (and)
 ## #     TIME 2.02, BEAT  2  :       (3)
 ## #     TIME 2.52, BEAT  2.5:       (and)
-## #     TIME 3.02, BEAT  3  :    1!
+## #     TIME 3.02, BEAT  3  :    2!
 ## #     TIME 3.52, BEAT  3.5:       (and)
 ## #     TIME 4.02, BEAT  4  :       (2)
 ## #     TIME 4.52, BEAT  4.5:       (and)
 ## #     TIME 5.02, BEAT  5  :       (3)
 ## #     TIME 5.52, BEAT  5.5:       (and)
-## #     TIME 6.02, BEAT  6  :    2!
+## #     TIME 6.02, BEAT  6  :    3!
 ## #     TIME 6.52, BEAT  6.5:       (and)
 ## #     TIME 7.02, BEAT  7  :       (2)
 ## #     TIME 7.52, BEAT  7.5:       (and)
 ## #     TIME 8.02, BEAT  8  :       (3)
 ## #     TIME 8.50, BEAT  8.5:       (and)
-## #     TIME 9.00, BEAT  9  :    3!
+## #     TIME 9.00, BEAT  9  :    4!
 ## #     TIME 9.50, BEAT  9.5:       (and)
 ## # ...etc
 ## [/codeblock]
@@ -132,18 +134,24 @@ class _Rhythm:
 	# We pass secs_per_beat so user can change bpm any time
 	func emit_if_needed(position: float, secs_per_beat: float) -> void:
 		var interval_secs = beat_count * secs_per_beat
-		var current_interval = int(floor((position - start_beat) / interval_secs))
-		var secs_past_interval = fmod(position - start_beat, interval_secs)
-		var valid_interval = current_interval > 0 and (repeating or current_interval == 1)
+		var interval_start_position = start_beat * secs_per_beat
+		var current_interval = int(floor((position - interval_start_position) / interval_secs))
+		var secs_past_interval = fmod(position - interval_start_position, interval_secs)
+		var valid_interval = current_interval >= 0 and (repeating or current_interval == 0)
 		var too_late = secs_past_interval >= TOO_LATE
 		if not valid_interval or too_late:
-			last_frame_interval = null
+			last_frame_interval = null # we WILL emit upon the next valid interval
 		elif last_frame_interval != current_interval:
+			# NB mem leak: CONNECT_ONE_SHOT will remove the connection but leave the _Rhythm
+			# in _rhythms.  If this is an issue, we should intelligently remove unused _Rhythms
+			# (how to be sure user didn't keep a reference to connect to later?)
 			interval_changed.emit(current_interval)
 			last_frame_interval = current_interval
+		else:
+			pass
 
 
-## Emitted once per beat, excluding beat 0.  The [param current_beat] parameter
+## Emitted once per beat, including beat 0.  The [param current_beat] parameter
 ## is the value of [member RhythmNotifier.current_beat].
 ## [br][br][color=yellow]Note:[/color] This once-per-beat signal is a convenience to 
 ## allow connecting in the inspector, and is equivalent to [code]beats(1.0)[/code]. For
@@ -216,7 +224,12 @@ var _rhythms: Array[_Rhythm] = []
 
 
 func _ready():
-	# NB func() supports 4.2 which can't connect directly to beat.emit
+	# NB: Without this, the user's unique beats() signals would fire in registration order.
+	# But with this, we move all .beats(1.0) and .beat signals to the front of the
+	# firing queue (_rhythms).  If we don't like that, we could treat .beat as a special
+	# case to check before or after calling .emit_if_needed() on all _rhythms, and document that if
+	# the user needs order consistency they should use .beats(1).connect instead of .beat.connect.
+	# NB using "func()" to support 4.2 which can't connect directly to beat.emit
 	beats(1.0).connect(func(current_interval): beat.emit(current_interval))
 
 
@@ -239,34 +252,38 @@ func _physics_process(delta):
 
 ## Returns a signal that emits when a specific beat is reached, or repeatedly every specified
 ## number of beats. [param start_beat] (defaults to [code]0.0[/code]) is the beat from which
-## to begin counting. [param beat_count] is the number of beats after [param start_beat] on which
-## to signal. If [param repeating] (defaults to [code]true[/code]), the signal is emitted
-## every [param beat_count] beats after [param start_beat].
+## to begin signalling. If [param repeating] (defaults to [code]true[/code]), the signal is also
+## emitted every [param beat_count] beats after [param start_beat]; if [param repeating] is false,
+## [param beat_count] is ignored.
 ## [br][br]Callback should be of the form [code]fn(current_interval)[/code], where
 ## [param current_interval] is the number of [param beat_count]-length intervals 
-## past [param start_beat].
+## past [param start_beat] (so, [param current_interval] will be [code]0[/code] when the first
+## signal is emitted on beat [param start_beat].)
 ##
 ## [br][br]Usage:
 ## [codeblock]
-## # Signals on beat 1, 2, 3, etc.  Equivalent to beat.connect(...)
+## # Signals on beat 0, 1, 2, 3, etc.  Equivalent to beat.connect(...)
 ## beats(1.0).connect(func(beat): pass)
 ##
-## # Signals on beat 4, 8, 12, etc
-## beats(4).connect(func(four_beat_group): pass)  # Parameter value will be 1, 2, 3, etc.
-## # Signals on beat 6.25, 10.25, 12.25, etc
-## beats(4.25, true, 2).connect(func(four_beat_group): pass)  # Parameter value will be 1, 2, 3, etc.
+## # Signals on beat 0, 4, 8, 12, etc
+## beats(4).connect(func(four_beat_group_number): pass)  # Param value will be 0, 1, 2, 3, etc.
+## # Signals on beat 2, 6.25, 10.5, 12.75, etc
+## beats(4.25, true, 2).connect(func(current_group): pass)  # Param value will be 0, 1, 2, 3, etc.
 ##
-## # Signals anytime playback reaches beat 8.5
-## beats(8.5, false).connect(func(_i): pass)  # Parameter value will be 1
-## # Signals anytime playback reaches beat 10
-## beats(8, false, 2).connect(func(_i): pass)  # Parameter value will be 1
+## # Signals anytime playback reaches beat 8.5, including subsequent times in looping playback
+## beats(123.456, false, 8.5).connect(func(_i): pass)  # Parameter value will always be 0
 ##
-## # Signals once, on beat 8
-## beats(8, false).connect(_func, CONNECT_ONE_SHOT)
-## # Signals once, the first time a multiple of 4 beats after beat 2 is reached
+## # Signals once, on beat 8.
+## beats(0, false, 8).connect(_func, CONNECT_ONE_SHOT)
+## # Signals once, on beat 2 or the first time a multiple of 4 beats after beat 2 is reached.
+## # So if playback is started at beat 7, it will signal on beat 10 then disconnect itself.
 ## beats(4, true, 2).connect(_func, CONNECT_ONE_SHOT)
 ## [/codeblock]
 func beats(beat_count: float, repeating := true, start_beat := 0.0) -> Signal:
+	if not repeating:
+		# unused; make it consistent to aid in reuse below.  And make it large enough
+		# so the math works well in .emit_if_needed
+		beat_count = 100.0
 	for rhythm in _rhythms:
 		if (rhythm.beat_count == beat_count 
 			and rhythm.repeating == repeating
