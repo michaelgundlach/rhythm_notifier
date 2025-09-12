@@ -216,7 +216,8 @@ var _rhythms: Array[_Rhythm] = []
 
 
 func _ready():
-	beats(1.0).connect(beat.emit)
+	# NB func() supports 4.2 which can't connect directly to beat.emit
+	beats(1.0).connect(func(current_interval): beat.emit(current_interval))
 
 
 # If not stopped, recalculate track position and emit any appropriate signals.
